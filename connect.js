@@ -23,20 +23,7 @@ const COLOR_DEFAULT = '\x1b[39m';
 
 let receiver = [];
 
-async function test() {
-    // MySQLのデータベースコネクション接続
-    let connection = await get_connection();
-    let result = {};
-    if(connection) {
-        // コネクションが確立したら、クエリ実行
-        let [rows] = await connection.execute('SELECT * FROM test');
-        result = rows;
-        // ここでコネクションを切断
-        await connection.end();
-    }
-    return result;
-}
-
+const ANALYZESYSTEM_VERSION = "1.3.0";
 
 /**
  * [SET] メイン処理
@@ -46,11 +33,15 @@ async function test() {
  * @returns {void}
  */
 (async function main() {
-    let yesno = await read_user_input('[INPUT] reset agent data? [y/n] ');
+    await console.log(`${COLOR_CYAN}Analyze${COLOR_GREEN}System ${COLOR_DEFAULT}ver. ${ANALYZESYSTEM_VERSION}`);
+
+
+    let yesno = await read_user_input('[INPUT] Reset Agent & Trap data? [y/n] ');
 
     // データベースチェック
     let con = await get_connection();
     if(!con) {
+        // エラーが発生したら、この時点で終了
         data_log(`[${COLOR_RED}ERROR${COLOR_DEFAULT}] ${COLOR_YELLOW} unable to connect database`);
         return;
     } else {
@@ -62,24 +53,30 @@ async function test() {
         case 'y':
         case 'Y':
             // YESのときのみ、エージェントの初期化をする
-            await reset_agents();
+            await reset_agent();
+
+
+
+            // トラップ情報リセット
+            await reset_trap();
+
             break;
         default:
-            data_log('[AGENT INIT / SKIP]');
+            await data_log('[AGENT INIT / SKIP]');
             break;
     }
 
-    // エージェントセッティング
-    await set_agents();
-    
     // ユーザセッティング
     await setup_user();
 
+    // エージェントセッティング
+    await agent_setup();
+
+    // トラップ情報セットアップ
+    await trap_setup();
+
     // トラップ受付開始
     await trap_start();
-
-    // ソケット受付開始
-    await socket_start();
 
     // 常時監視機能の受付
     setTimeout(async function () {
@@ -92,35 +89,192 @@ async function test() {
                 await get_start();
                 break;
             default:
-                data_log(`[GET / ${COLOR_CYAN}SKIP${COLOR_DEFAULT}]`);
+                await data_log(`[GET / ${COLOR_CYAN}SKIP${COLOR_DEFAULT}]`);
                 break;
         }
+        // ソケット受付開始（常時通信が開始された時点でソケット通信を開始する）
+        await socket_start();
     }, 500);
 })();
 
-async function setup_user() {
-    await data_log(`[USER / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}] Starting User reset setup...`);
-    let userData = inputData.userInputData;
-    if(userData) {
-        await reset_user();
-        for(let u of userData) {
-            await add_user(u['username'], u['password']);
+/**
+ * [SET] トラップ情報のセットアップ
+ * input.jsに記載されたトラップ情報をセットアップします
+ * @returns {void}
+ */
+async function trap_setup() {
+    await data_log(`[TRAP / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}] Starting Trap setup...`);
+    let trapData = inputData.trapInputData;
+    const con = await get_connection();
+    if(trapData && con) {
+        for (let t of trapData) {
+            // トラップデータの存在確認
+            let [rows] = await con.execute("SELECT TRAPOID, TRAPNAME, DESCS, HOW FROM ap_trap WHERE TRAPID = ?", [t['trapid']]);
+            if(rows && rows.length === 1) {
+                let r = rows[0];
+                // 更新必須か確認
+                if(r['TRAPOID'] === t['trapoid'] && r['TRAPNAME'] === t['trapname'] && r['DESCS'] === t['desc'] && r['HOW'] === t['how']) {
+                    // ログだけ残す
+                    await data_log(`[TRAP / ${COLOR_YELLOW}EXISTS${COLOR_DEFAULT}] (${t['trapid']}) ${t['trapoid']} - ${t['trapname']}`);
+                } else {
+                    // データを更新
+                    await con.execute("UPDATE ap_trap SET TRAPOID = ?, TRAPNAME = ?, DESCS = ?, HOW = ? WHERE TRAPID = ?", [t['trapoid'], t['trapname'], t['desc'], t['how'], t['trapid']]);
+                    await data_log(`[TRAP / ${COLOR_CYAN}UPDATED${COLOR_DEFAULT}] (${t['trapid']}) ${t['trapoid']} - ${t['trapname']}`);
+                }
+            } else {
+                await con.execute("INSERT INTO ap_trap (TRAPID, TRAPOID, TRAPNAME, DESCS, HOW) VALUES (?, ?, ?, ?, ?)", [t['trapid'], t['trapoid'], t['trapname'], t['desc'], t['how']]);
+                await data_log(`[TRAP / ${COLOR_MAGENTA}ADDED${COLOR_DEFAULT}] (${t['trapid']}) ${t['trapoid']} - ${t['trapname']}`);
+            }
+
         }
-        await data_log(`[USER / ${COLOR_GREEN}SUCCESS${COLOR_DEFAULT}] Successfully setup`);
+        await data_log(`[TRAP / ${COLOR_GREEN}SUCCESS${COLOR_DEFAULT}] Successfully Trap Setup`);
     }
 }
 
+/**
+ * [SET] トラップ情報のリセット
+ * トラップ情報をリセットします
+ * @returns {void}
+ */
+async function reset_trap() {
+    const con = await get_connection();
+    if(con) {
+        await data_log(`[TRAP / ${COLOR_CYAN}RESET${COLOR_DEFAULT}] Reset Trap...`);
+        await con.execute('DELETE FROM ap_trap');
+        await con.execute('ALTER TABLE ap_trap AUTO_INCREMENT = 1');
+        await con.end();
+        await data_log(`[TRAP / ${COLOR_GREEN}RESET${COLOR_DEFAULT}] Successfully Reset Trap`);
+    }
+}
+
+
+/**
+ * [SET] ユーザのセットアップ
+ * input.jsに記載されたユーザをセットアップします
+ * @returns {void}
+ */
+async function setup_user() {
+    await data_log(`[USER / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}] Starting User setup...`);
+    let userData = inputData.userInputData;
+    if(userData) {
+        await reset_user();
+        for (let u of userData) {
+            await add_user(u['username'], u['password']);
+            await data_log(`[USER / ${COLOR_MAGENTA}ADDED${COLOR_DEFAULT}] ${u['username']}`);
+        }
+        await data_log(`[USER / ${COLOR_GREEN}SUCCESS${COLOR_DEFAULT}] Successfully User Setup`);
+    }
+}
+
+/**
+ * [SET] ユーザのリセット
+ * ユーザ情報・ユーザログ情報・ユーザセッション情報を削除します
+ * @returns {void}
+ */
 async function reset_user() {
     const con = await get_connection();
     if(con) {
+        await data_log(`[USER / ${COLOR_CYAN}RESET${COLOR_DEFAULT}] Reset User...`);
         await con.execute('DELETE FROM ap_session');
         await con.execute('DELETE FROM ap_userlog');
         await con.execute('DELETE FROM ap_user');
-        
+
         await con.execute('ALTER TABLE ap_session AUTO_INCREMENT = 1');
         await con.execute('ALTER TABLE ap_userlog AUTO_INCREMENT = 1');
         await con.execute('ALTER TABLE ap_user AUTO_INCREMENT = 1');
         await con.end();
+        await data_log(`[USER / ${COLOR_GREEN}RESET${COLOR_DEFAULT}] Successfully Reset User`);
+    }
+}
+
+/**
+ * エージェントのリセット
+ * データベース内で保存されているすべてのエージェント情報を消去します
+ * @returns {void}
+ */
+async function reset_agent() {
+    data_log(`[AGENT / ${COLOR_CYAN}RESET${COLOR_DEFAULT}] Reset Agent...`);
+    const con = await get_connection();
+    if(con) {
+        // ap_agent_interfaceの削除
+        await con.execute('DELETE FROM ap_agent_interface');
+        await con.execute('ALTER TABLE ap_agent_interface AUTO_INCREMENT = 1;');
+        // ap_getdetailsの削除
+        await con.execute('DELETE FROM ap_getdetails');
+        await con.execute('ALTER TABLE ap_getdetails AUTO_INCREMENT = 1;');
+        // ap_getlogの削除
+        await con.execute('DELETE FROM ap_getlog');
+        await con.execute('ALTER TABLE ap_getlog AUTO_INCREMENT = 1;');
+        // ap_traplogの削除
+        await con.execute('DELETE FROM ap_traplog');
+        await con.execute('ALTER TABLE ap_getlog AUTO_INCREMENT = 1;');
+        // ap_usmの削除
+        await con.execute('DELETE FROM ap_usm');
+        await con.execute('ALTER TABLE ap_usm AUTO_INCREMENT = 1;');
+        // ap_agent_mibの削除
+        await con.execute('DELETE FROM ap_agent_mib');
+        await con.execute('ALTER TABLE ap_agent_mib AUTO_INCREMENT = 1;');
+        // ap_agentの削除
+        await con.execute('DELETE FROM ap_agent');
+        await con.execute('ALTER TABLE ap_agent AUTO_INCREMENT = 1;');
+
+        await con.end();
+    }
+    data_log(`[AGENT / ${COLOR_GREEN}RESET${COLOR_DEFAULT}] Successfully Reset Agent`);
+}
+
+/**
+ * [SET] エージェントのセット
+ * 本スクリプト内で設定している情報をもとにデータベースに保存します
+ * @returns {void}
+ */
+async function agent_setup() {
+    let agentData = inputData.agentInputData;
+    const con = await get_connection();
+    if(agentData && con) {
+        let mibs = ['1.3.6.1.2.1.1', '1.3.6.1.2.1.2', '1.3.6.1.2.1.4'];
+        let int_data = [];
+        for (let a of agentData) {
+            // トラップデータの存在確認
+            let [rows] = await con.execute("SELECT HOSTADDRESS, GETPORT, TRAPPORT, POSX, POSY, HOSTNAME, ICONID, PACKETTHRESHOULD FROM ap_agent WHERE AGENTID = ?", [a['agentid']]);
+            let [rows2] = await con.execute("SELECT SECURITYNAME, SECURITYTYPE, AUTHALGOID, AUTHPASS, PRIVALGOID, PRIVALGOPASS FROM ap_usm WHERE AGENTID = ?", [a['agentid']]);
+            if(rows && rows2 && rows.length === 1 && rows2.length === 1) {
+                let r = rows[0];
+                let r2 = rows2[0];
+                // 更新必須か確認
+                if(r['TRAPOID'] === a['trapoid'] && r['TRAPNAME'] === a['trapname'] && r['DESCS'] === a['desc'] && r['HOW'] === a['how']
+                        && r2['SECURITYNAME'] === a['sname'] && r2['STYPE'] === a['stype'] && r2['AUTHALGOID'] === a['aalgoid'] && r2['AUTHPASS'] === a['apass'] && r2['PRIVALGOID'] === a['palgoid'] && r2['PRIVALGOPASS'] === a['ppass']) {
+                    // ログだけ残す
+                    await data_log(`[AGENT / ${COLOR_YELLOW}EXISTS${COLOR_DEFAULT}] (${a['agentid']}) ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
+                } else {
+                    // データを更新
+                    await con.execute("UPDATE ap_agent SET HOSTADDRESS = ?, GETPORT = ?, TRAPPORT = ?, POSX = ? , POSY = ?, HOSTNAME = ?, ICONID = ?, PACKETTHRESHOULD = ? WHERE AGENTID = ?", [a['host'], a['gport'], a['tport'], a['posx'], a['posy'], a['hname'], a['iconid'], a['packet_thre'], a['agentid']]);
+                    await con.execute("UPDATE ap_usm SET SECURITYNAME = ?, SECURITYTYPE = ?, AUTHALGOID = ?, AUTHPASS = ? , PRIVALGOID = ?, PRIVALGOPASS = ? WHERE AGENTID = ?", [a['sname'], a['stype'], a['aalgoid'], a['apass'], a['palogid'], a['ppass'], a['agentid']]);
+                    await data_log(`[AGENT / ${COLOR_CYAN}UPDATED${COLOR_DEFAULT}] (${a['agentid']}) ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
+                }
+            } else {
+                await con.execute('INSERT INTO ap_agent (AGENTID, HOSTADDRESS, GETPORT, TRAPPORT, POSX, POSY, HOSTNAME, ICONID, PACKETTHRESHOULD) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [a['agentid'], a['host'], a['gport'], a['tport'], a['posx'], a['posy'], a['hname'], a['iconid'], a['packet_thre']]);
+                await con.execute('INSERT INTO ap_usm (AGENTID, SECURITYNAME, SECURITYTYPE, AUTHALGOID, AUTHPASS, PRIVALGOID, PRIVALGOPASS) VALUES (?, ?, ?, ?, ?, ?, ?)', [a['agentid'], a['sname'], a['stype'], a['aalgoid'], a['apass'], a['palgoid'], a['ppass']]);
+                for (let m of mibs) {
+                    // 1件ずつ追加
+                    await con.execute('INSERT INTO ap_agent_mib (MIBGROUPID, AGENTID) VALUES (?, ?)', [m, a['agentid']]);
+                }
+                // インタフェース設定の追加
+                for (let ink of a['conn']) {
+                    int_data.push(ink);
+                }
+                await data_log(`[AGENT / ${COLOR_MAGENTA}ADDED${COLOR_DEFAULT}] (${a['agentid']}) ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
+            }
+
+        }
+        // インタフェースの追加
+        for (let i of int_data) {
+            await con.execute('INSERT INTO ap_agent_interface (ORIGAGENTID, ORIGMACADDRESS, CONAGENTID, CONMACADDRESS) VALUES (?, ?, ?, ?)', [i[0], i[1], i[2], i[3]]);
+            await data_log(`[AGENT / ${COLOR_MAGENTA}ADDED${COLOR_DEFAULT}] INTERFACE ([${i[0]}]${i[1]} <-> [${i[2]}]${i[3]})`);
+        }
+        // セッションの切断
+        await con.end();
+        await data_log(`[TRAP / ${COLOR_GREEN}SUCCESS${COLOR_DEFAULT}] Successfully Trap Setup`);
     }
 }
 
@@ -129,8 +283,8 @@ async function reset_user() {
  * @returns {void}
  */
 async function get_start() {
-    await data_log(`[GET / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}] Starting setup...`);
-    await data_log(`[GET / ${COLOR_MAGENTA}SET${COLOR_DEFAULT}] Regular monitoring has been started on and set duration ${run_delay / 1000} s`);
+    await data_log(`[GET / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}] Starting Get Setup...`);
+    await data_log(`[GET / ${COLOR_GREEN}SET${COLOR_DEFAULT}] Regular monitoring has been started on and set duration ${run_delay / 1000} s`);
     // 1分間に一度起動
     await set_log_agents();
     setInterval(async function () {
@@ -141,10 +295,12 @@ async function get_start() {
 
 /**
  * [SET] トラップレシーバー作成
+ * SNMPトラップを受け付けるレシーバーです
  * @returns {void}
  */
 async function trap_start() {
     data_log(`[TRAP / ${COLOR_CYAN}SETUP${COLOR_DEFAULT}]`);
+    // レシーバーリストをリセットする
     receiver = [];
     // エージェントごとのポートで開放するようにする
     let agents = await get_agents();
@@ -156,23 +312,23 @@ async function trap_start() {
         let portindex = ports.findIndex(p => p === info['trapport']);
         if(portindex === -1) {
 
-            // Default options
+            // デフォルト設定
             let options = {
                 port: info['trapport'],
                 disableAuthorization: false,
                 includeAuthentication: true,
                 accessControlModelType: snmp.AccessControlModelType.None,
-                engineID: "8000B98380XXXXXXXXXXXXXXXXXXXXXXXX", // where the X's are random hex digits
+                engineID: "8000B98380XXXXXXXXXXXXXXXXXXXXXXXX",
                 address: null,
                 transport: "udp4"
             };
-            data_log(`[TRAP / ${COLOR_CYAN}SET${COLOR_DEFAULT}] ${info['hostaddress']}:${info['trapport']}/udp`);
+            data_log(`[TRAP / ${COLOR_CYAN}SET${COLOR_DEFAULT}] :${info['trapport']}/udp`);
             let callback = async function (error, notification) {
                 if(error) {
                     // エラーを吐く
                     console.error(error);
                 } else {
-                    // それ以外
+                    // それ以外（PDUおよびRINFOからエージェント情報を検索する）
                     let pdu = notification['pdu'];
                     let rinfo = notification['rinfo'];
                     let user = pdu.user;
@@ -218,7 +374,7 @@ async function trap_start() {
                                             let search = await search_japname(v['oid'].toString());
                                             if(search) {
                                                 result['other'].push(search + ' : ' + v['value']);
-                                            } else if (v['oid'].toString() !== '1.3.6.1.2.1.1.3.0') {
+                                            } else if(v['oid'].toString() !== '1.3.6.1.2.1.1.3.0') {
                                                 result['other'].push(v['oid'] + ' : ' + v['value']);
                                             }
                                     }
@@ -251,7 +407,7 @@ async function trap_start() {
             // ユーザの設定（V3のUSMの設定）
             let sec = await get_agent_security(agentid);
             r.getAuthorizer().addUser(sec);
-            data_log(`[TRAP / ${COLOR_GREEN}USER ADDED${COLOR_DEFAULT}] ${COLOR_CYAN}${sec['name']}${COLOR_DEFAULT} [${info['hostaddress']}]`);
+            data_log(`[TRAP / ${COLOR_MAGENTA}USER ADDED${COLOR_DEFAULT}] ${COLOR_CYAN}${sec['name']}${COLOR_DEFAULT} [${info['hostaddress']}]`);
         }
     }
 }
@@ -1203,93 +1359,6 @@ async function get_mib(group_mibs) {
 }
 
 /**
- * エージェントのリセット
- * データベース内で保存されているすべてのエージェント情報を消去します
- * @returns {void}
- */
-async function reset_agents() {
-    data_log('[AGENT INITIALIZING]');
-    const con = await get_connection();
-    if(con) {
-        // ap_agent_interfaceの削除
-        await con.execute('DELETE FROM ap_agent_interface');
-        await con.execute('ALTER TABLE ap_agent_interface AUTO_INCREMENT = 1;');
-        // ap_getdetailsの削除
-        await con.execute('DELETE FROM ap_getdetails');
-        await con.execute('ALTER TABLE ap_getdetails AUTO_INCREMENT = 1;');
-        // ap_getlogの削除
-        await con.execute('DELETE FROM ap_getlog');
-        await con.execute('ALTER TABLE ap_getlog AUTO_INCREMENT = 1;');
-        // ap_traplogの削除
-        await con.execute('DELETE FROM ap_traplog');
-        await con.execute('ALTER TABLE ap_getlog AUTO_INCREMENT = 1;');
-        // ap_usmの削除
-        await con.execute('DELETE FROM ap_usm');
-        await con.execute('ALTER TABLE ap_usm AUTO_INCREMENT = 1;');
-        // ap_agent_mibの削除
-        await con.execute('DELETE FROM ap_agent_mib');
-        await con.execute('ALTER TABLE ap_agent_mib AUTO_INCREMENT = 1;');
-        // ap_agentの削除
-        await con.execute('DELETE FROM ap_agent');
-        await con.execute('ALTER TABLE ap_agent AUTO_INCREMENT = 1;');
-
-        await con.end();
-    }
-    data_log('・初期化が完了しました');
-}
-
-/**
- * [SET] エージェントのセット
- * 本スクリプト内で設定している情報をもとにデータベースに保存します
- * @returns {void}
- */
-async function set_agents() {
-    const con = await get_connection();
-    data_log(`[AGENT / ${COLOR_CYAN}SET${COLOR_DEFAULT}]`);
-    if(con && inputData.agentInputData && inputData.agentInputData.length > 0) {
-        let mibs = ['1.3.6.1.2.1.1', '1.3.6.1.2.1.2', '1.3.6.1.2.1.4'];
-        let int_data = [];
-        for (let a of inputData.agentInputData) {
-            // エージェント情報の検索
-            let s = await search_agent(a['host'], a['gport'], a['tport'], a['hname']);
-            switch (s) {
-                case 0:
-                    // エージェントへの追加
-                    await con.execute('INSERT INTO ap_agent (AGENTID, HOSTADDRESS, GETPORT, TRAPPORT, POSX, POSY, HOSTNAME, ICONID, PACKETTHRESHOULD) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [a['agentid'], a['host'], a['gport'], a['tport'], a['posx'], a['posy'], a['hname'], a['iconid'], a['packet_thre']]);
-                    // エージェントIDの取得
-                    let [rows] = await con.execute('SELECT AGENTID FROM ap_agent WHERE HOSTADDRESS = ? AND GETPORT = ? AND TRAPPORT = ? AND HOSTNAME = ?', [a['host'], a['gport'], a['tport'], a['hname']]);
-                    if(rows && rows[0]['AGENTID']) {
-                        // USMへの追加
-                        await con.execute('INSERT INTO ap_usm (AGENTID, SECURITYNAME, SECURITYTYPE, AUTHALGOID, AUTHPASS, PRIVALGOID, PRIVALGOPASS)  VALUES (?, ?, ?, ?, ?, ?, ?)', [rows[0]['AGENTID'], a['sname'], a['stype'], a['aalgoid'], a['apass'], a['palgoid'], a['ppass']]);
-                        // MIB への追加
-                        for (let m of mibs) {
-                            // 1件ずつ追加
-                            await con.execute('INSERT INTO ap_agent_mib (MIBGROUPID, AGENTID) VALUES (?, ?)', [m, rows[0]['AGENTID']]);
-                        }
-                        // インタフェース設定の追加
-                        for (let ink of a['conn']) {
-                            int_data.push(ink);
-                        }
-                    }
-                    data_log(`[AGENT / ${COLOR_CYAN}ADDED${COLOR_DEFAULT}] ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
-                    break;
-                case - 1:
-                    console.error('[ERROR] データベースエラーが発生しました');
-                    break;
-                default:
-                    data_log(`[AGENT / ${COLOR_YELLOW}EXISTS${COLOR_DEFAULT}] ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
-                    break;
-            }
-        }
-        for (let i of int_data) {
-            await con.execute('INSERT INTO ap_agent_interface (ORIGAGENTID, ORIGMACADDRESS, CONAGENTID, CONMACADDRESS) VALUES (?, ?, ?, ?)', [i[0], i[1], i[2], i[3]]);
-        }
-        // セッションの切断
-        await con.end();
-    }
-}
-
-/**
  * [GET] エージェント情報取得（ログID参照）
  * ユーザ向けのエージェント情報を取得します
  * @param {Number} logid ログIDを指定します
@@ -1299,7 +1368,7 @@ async function get_agent_info_from_logid(logid) {
     const con = await get_connection();
     let result = '';
     if(con) {
-        let [rows] = await con.execute('SELECT b.AGENTID as agentid, a.HOSTADDRESS as hostaddress, a.GETPORT as getport, a.TRAPPORT as trapport, a.HOSTNAME as hostname, a.POSX as posx, a.POSY as posy, a.PACKETTHRESHOULD as theshould, a.ICONID as iconid FROM ap_agent a INNER JOIN ap_getlog b ON a.AGENTID = b.AGENTID WHERE b.GETLOGID = ? ', [logid]);
+        let [rows] = await con.execute('SELECT b.AGENTID as agentid, a.HOSTADDRESS as hostaddress, a.GETPORT as getport, a.TRAPPORT as trapport, a.HOSTNAME as hostname, a.POSX as posx, a.POSY as posy, a.PACKETTHRESHOULD as threshould, a.ICONID as iconid FROM ap_agent a INNER JOIN ap_getlog b ON a.AGENTID = b.AGENTID WHERE b.GETLOGID = ? ', [logid]);
         await con.end();
         if(rows && rows.length === 1 && rows[0]) {
             result = rows[0];
@@ -1318,7 +1387,7 @@ async function get_agent_info_from_traplogid(traplogid) {
     const con = await get_connection();
     let result = '';
     if(con) {
-        let [rows] = await con.execute('SELECT b.AGENTID as agentid, a.HOSTADDRESS as hostaddress, a.GETPORT as getport, a.TRAPPORT as trapport, a.HOSTNAME as hostname, a.POSX as posx, a.POSY as posy, a.PACKETTHRESHOULD as theshould, a.ICONID as iconid FROM ap_agent a INNER JOIN ap_traplog b ON a.AGENTID = b.AGENTID WHERE b.TRAPLOGID = ? ', [traplogid]);
+        let [rows] = await con.execute('SELECT b.AGENTID as agentid, a.HOSTADDRESS as hostaddress, a.GETPORT as getport, a.TRAPPORT as trapport, a.HOSTNAME as hostname, a.POSX as posx, a.POSY as posy, a.PACKETTHRESHOULD as threshould, a.ICONID as iconid FROM ap_agent a INNER JOIN ap_traplog b ON a.AGENTID = b.AGENTID WHERE b.TRAPLOGID = ? ', [traplogid]);
         await con.end();
         if(rows && rows.length === 1 && rows[0]) {
             result = rows[0];
@@ -1337,7 +1406,7 @@ async function get_agent_info(agentid) {
     const con = await get_connection();
     let result = '';
     if(con) {
-        let [rows] = await con.execute('SELECT AGENTID as agentid, HOSTADDRESS as hostaddress, GETPORT as getport, TRAPPORT as trapport, HOSTNAME as hostname, POSX as posx, POSY as posy, PACKETTHRESHOULD as theshould, ICONID as iconid FROM ap_agent WHERE AGENTID = ?', [agentid]);
+        let [rows] = await con.execute('SELECT AGENTID as agentid, HOSTADDRESS as hostaddress, GETPORT as getport, TRAPPORT as trapport, HOSTNAME as hostname, POSX as posx, POSY as posy, PACKETTHRESHOULD as threshould, ICONID as iconid FROM ap_agent WHERE AGENTID = ?', [agentid]);
         await con.end();
         if(rows && rows.length === 1 && rows[0]) {
             result = rows[0];

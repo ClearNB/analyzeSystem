@@ -1,6 +1,6 @@
 {
     "name": "analyzeSystem",
-    "version": "1.0.0",
+    "version": "1.0.5",
     "keywords": [
         "util",
         "functional",
@@ -15,7 +15,10 @@
     },
     "author": "ClearNB",
     "description": "Web Server For Network Management Database Ondemand System",
-    "repository": "",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ClearNB/analyzeSystem.git"
+    },
     "contributors": [],
     "engines": {
         "node": "^18.x.x"
