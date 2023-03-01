@@ -23,7 +23,7 @@ const COLOR_DEFAULT = '\x1b[39m';
 
 let receiver = [];
 
-const ANALYZESYSTEM_VERSION = "1.3.0";
+const ANALYZESYSTEM_VERSION = "1.3.1";
 
 /**
  * [SET] メイン処理
