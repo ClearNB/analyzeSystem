@@ -11,6 +11,8 @@ const snmp = require('net-snmp');
 const net = require('net');
 const inputData = require('./input');
 
+let package = require('./package.json');
+
 const session_len = 25;
 const run_delay = 60000;
 
@@ -23,8 +25,6 @@ const COLOR_DEFAULT = '\x1b[39m';
 
 let receiver = [];
 
-const ANALYZESYSTEM_VERSION = "1.3.1";
-
 /**
  * [SET] メイン処理
  * アプリケーションの総括実行を行うための処理
@@ -33,7 +33,7 @@ const ANALYZESYSTEM_VERSION = "1.3.1";
  * @returns {void}
  */
 (async function main() {
-    await console.log(`${COLOR_CYAN}Analyze${COLOR_GREEN}System ${COLOR_DEFAULT}ver. ${ANALYZESYSTEM_VERSION}`);
+    await console.log(`${COLOR_CYAN}Analyze${COLOR_GREEN}System ${COLOR_DEFAULT}ver. ${package['version']}`);
 
 
     let yesno = await read_user_input('[INPUT] Reset Agent & Trap data? [y/n] ');
@@ -42,7 +42,7 @@ const ANALYZESYSTEM_VERSION = "1.3.1";
     let con = await get_connection();
     if(!con) {
         // エラーが発生したら、この時点で終了
-        data_log(`[${COLOR_RED}ERROR${COLOR_DEFAULT}] ${COLOR_YELLOW} unable to connect database`);
+        data_log(`[${COLOR_RED}ERROR${COLOR_DEFAULT}] ${COLOR_YELLOW} unable to connect database${COLOR_DEFAULT}`);
         return;
     } else {
         // 正常につながったので切断
