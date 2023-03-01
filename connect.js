@@ -249,7 +249,7 @@ async function agent_setup() {
                 } else {
                     // データを更新
                     await con.execute("UPDATE ap_agent SET HOSTADDRESS = ?, GETPORT = ?, TRAPPORT = ?, POSX = ? , POSY = ?, HOSTNAME = ?, ICONID = ?, PACKETTHRESHOULD = ? WHERE AGENTID = ?", [a['host'], a['gport'], a['tport'], a['posx'], a['posy'], a['hname'], a['iconid'], a['packet_thre'], a['agentid']]);
-                    await con.execute("UPDATE ap_usm SET SECURITYNAME = ?, SECURITYTYPE = ?, AUTHALGOID = ?, AUTHPASS = ? , PRIVALGOID = ?, PRIVALGOPASS = ? WHERE AGENTID = ?", [a['sname'], a['stype'], a['aalgoid'], a['apass'], a['palogid'], a['ppass'], a['agentid']]);
+                    await con.execute("UPDATE ap_usm SET SECURITYNAME = ?, SECURITYTYPE = ?, AUTHALGOID = ?, AUTHPASS = ? , PRIVALGOID = ?, PRIVALGOPASS = ? WHERE AGENTID = ?", [a['sname'], a['stype'], a['aalgoid'], a['apass'], a['palgoid'], a['ppass'], a['agentid']]);
                     await data_log(`[AGENT / ${COLOR_CYAN}UPDATED${COLOR_DEFAULT}] (${a['agentid']}) ${a['hname']} | ${a['host']}:${a['gport']}/udp | ${a['host']}:${a['tport']}/udp`);
                 }
             } else {
